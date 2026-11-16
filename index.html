@@ -1,0 +1,759 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Gesture Rail Shooter</title>
+    <meta name="description" content="Game tembak 3D di browser yang dikendalikan pola jari lewat webcam: pistol, shotgun, perisai, dan ledakan." />
+    <meta property="og:title" content="Gesture Rail Shooter" />
+    <meta property="og:description" content="Tembak robot dengan pola jari lewat webcam. Berjalan langsung di browser, tanpa instalasi." />
+    <meta name="theme-color" content="#05070c" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='11' fill='none' stroke='%23ffd23f' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='3' fill='%23ffd23f'/%3E%3C/svg%3E"
+    />
+    <style>
+      :root {
+        --panel: rgb(8 10 16 / 0.72);
+        --line: rgb(255 255 255 / 0.18);
+        --text: #e8ecf2;
+        --muted: #9aa4b2;
+        --pistol: #ffd23f;
+        --shotgun: #ff8c42;
+        --shield: #3fa9f5;
+        --blast: #ff4d6d;
+        --good: #5dd39e;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #0a0d14;
+        color: var(--text);
+        font-family: system-ui, sans-serif;
+      }
+      button {
+        font: inherit;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      #render-canvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+        touch-action: none;
+      }
+      #render-canvas.pointer-mode {
+        cursor: none;
+      }
+      /* Bukan display: none: Safari iOS berhenti mengirim frame untuk video yang tidak dirender. */
+      #webcam {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        opacity: 0;
+        pointer-events: none;
+      }
+      #webcam-preview {
+        position: absolute;
+        right: 16px;
+        bottom: 16px;
+        width: 200px;
+        height: 150px;
+        border-radius: 8px;
+        background: #000;
+        box-shadow: 0 4px 16px rgb(0 0 0 / 0.5);
+      }
+
+      /* ---- Kilasan layar ---- */
+      #vignette {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        transition: box-shadow 0.15s;
+      }
+      #vignette.shield {
+        box-shadow: inset 0 0 0 6px rgb(63 169 245 / 0.8), inset 0 0 80px rgb(63 169 245 / 0.45);
+      }
+      #vignette.hit {
+        animation: hit 0.45s ease-out;
+      }
+      #vignette.blocked {
+        animation: blocked 0.3s ease-out;
+      }
+      @keyframes hit {
+        from { background: rgb(255 40 60 / 0.4); }
+      }
+      @keyframes blocked {
+        from { background: rgb(63 169 245 / 0.35); }
+      }
+
+      /* ---- Crosshair ---- */
+      #crosshair {
+        position: absolute;
+        left: -16px;
+        top: -16px;
+        width: 32px;
+        height: 32px;
+        border: 2px solid #fff;
+        border-radius: 50%;
+        pointer-events: none;
+        box-shadow: 0 0 0 1px rgb(0 0 0 / 0.5);
+      }
+      #crosshair::after {
+        content: "";
+        position: absolute;
+        left: 13px;
+        top: 13px;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #fff;
+      }
+      #crosshair[data-weapon="pistol"] { border-color: var(--pistol); }
+      #crosshair[data-weapon="shotgun"] { border-color: var(--shotgun); width: 48px; height: 48px; left: -24px; top: -24px; }
+      #crosshair[data-weapon="shotgun"]::after { left: 21px; top: 21px; }
+      #crosshair.fire { animation: fire 0.2s ease-out; }
+      #crosshair.blast { animation: blast 0.5s ease-out; }
+      #crosshair.shield { border-color: var(--shield); border-width: 4px; }
+      #crosshair.charging { border-color: var(--blast); border-style: dashed; }
+      @keyframes fire {
+        from { scale: 1.6; }
+      }
+      @keyframes blast {
+        from { border-color: var(--blast); scale: 4; }
+      }
+
+      /* ---- HUD ---- */
+      #hud {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+      #hud-top {
+        position: absolute;
+        left: 16px;
+        right: 16px;
+        top: 16px;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 12px;
+      }
+      #hud-score {
+        font-size: 32px;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+        text-shadow: 0 2px 8px rgb(0 0 0 / 0.6);
+      }
+      #hud-combo {
+        color: var(--pistol);
+        font-weight: 600;
+        min-height: 1.2em;
+      }
+      #hud-progress {
+        padding: 6px 10px;
+        border-radius: 6px;
+        background: var(--panel);
+        font-size: 14px;
+      }
+      #hud-bottom {
+        position: absolute;
+        left: 50%;
+        bottom: 16px;
+        translate: -50% 0;
+        width: min(560px, calc(100% - 32px));
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .bar {
+        height: 12px;
+        border-radius: 6px;
+        background: rgb(255 255 255 / 0.12);
+        overflow: hidden;
+        position: relative;
+      }
+      .bar > span {
+        display: block;
+        height: 100%;
+        transition: width 0.12s;
+      }
+      #hud-health > span { background: var(--good); }
+      #hud-health.low > span { background: var(--blast); }
+      #hud-shield > span { background: var(--shield); }
+      #hud-shield.broken > span { background: var(--muted); }
+      .bar-label {
+        display: flex;
+        justify-content: space-between;
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 2px;
+      }
+      #hud-status {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 13px;
+      }
+      #hud-status > span {
+        padding: 4px 8px;
+        border-radius: 6px;
+        background: var(--panel);
+        color: var(--muted);
+      }
+      #hud-status > span.ready {
+        color: var(--text);
+      }
+      #hud-weapon {
+        font-weight: 700;
+        color: var(--text) !important;
+      }
+      #hud-weapon[data-weapon="pistol"] { color: var(--pistol) !important; }
+      #hud-weapon[data-weapon="shotgun"] { color: var(--shotgun) !important; }
+      #hud-weapon[data-weapon="shield"] { color: var(--shield) !important; }
+      #hud-weapon[data-weapon="blast"] { color: var(--blast) !important; }
+      #weapons {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 6px;
+        pointer-events: auto;
+      }
+      #weapons button {
+        font-size: 13px;
+        padding: 6px 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel);
+        color: var(--text);
+        cursor: pointer;
+      }
+      #weapons button.active {
+        border-color: var(--pistol);
+        color: var(--pistol);
+      }
+
+      /* ---- Layar menu dan hasil ---- */
+      .screen {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 16px;
+        background: rgb(5 7 12 / 0.6);
+        backdrop-filter: blur(3px);
+        overflow-y: auto;
+      }
+      .card {
+        width: min(520px, 100%);
+        padding: 24px;
+        border-radius: 12px;
+        background: rgb(12 15 23 / 0.92);
+        border: 1px solid var(--line);
+        box-sizing: border-box;
+      }
+      .card h1,
+      .card h2 {
+        margin: 0 0 8px;
+      }
+      .card p {
+        color: var(--muted);
+        margin: 0 0 12px;
+        line-height: 1.5;
+      }
+      .gestures {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 6px 12px;
+        margin: 0 0 16px;
+        font-size: 14px;
+      }
+      .gestures dt { font-weight: 700; }
+      .gestures dd { margin: 0; color: var(--muted); }
+      .gestures dt:nth-of-type(1) { color: var(--pistol); }
+      .gestures dt:nth-of-type(2) { color: var(--shotgun); }
+      .gestures dt:nth-of-type(3) { color: var(--shield); }
+      .gestures dt:nth-of-type(4) { color: var(--blast); }
+      #menu-difficulty {
+        display: flex;
+        gap: 6px;
+        margin: 0 0 16px;
+      }
+      #menu-difficulty button {
+        flex: 1;
+        padding: 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: transparent;
+        color: var(--text);
+        cursor: pointer;
+      }
+      #menu-difficulty button[aria-pressed="true"] {
+        border-color: var(--pistol);
+        color: var(--pistol);
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .settings {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px 16px;
+        margin: 0 0 16px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+      .settings select,
+      .settings button {
+        margin-left: 6px;
+        padding: 6px 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: transparent;
+        color: var(--text);
+        font: inherit;
+        cursor: pointer;
+      }
+      .settings select option { background: #10141c; }
+      .primary,
+      .secondary {
+        flex: 1;
+        min-width: 160px;
+        padding: 12px 16px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      .primary {
+        border: 0;
+        background: var(--shield);
+        color: #04121f;
+        font-weight: 700;
+      }
+      .secondary {
+        border: 1px solid var(--line);
+        background: transparent;
+        color: var(--text);
+      }
+      .primary:disabled,
+      .secondary:disabled {
+        opacity: 0.6;
+        cursor: progress;
+      }
+      #menu-status,
+      #menu-best {
+        min-height: 1.2em;
+        margin: 12px 0 0;
+        font-size: 14px;
+      }
+      #result[data-result="won"] #result-title { color: var(--good); }
+      #result[data-result="lost"] #result-title { color: var(--blast); }
+      #result-stats {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 6px 16px;
+        margin: 12px 0 16px;
+        font-variant-numeric: tabular-nums;
+      }
+      #result-stats dt { color: var(--muted); }
+      #result-stats dd { margin: 0; text-align: right; font-weight: 600; }
+      #result-record {
+        color: var(--pistol);
+        font-weight: 700;
+      }
+
+      /* ---- Izin kamera, latihan, jeda, petunjuk ---- */
+      .privacy {
+        margin: 0 0 16px;
+        padding-left: 20px;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.6;
+      }
+      #permission-status.error {
+        color: var(--blast);
+      }
+      .link {
+        margin-top: 12px;
+        padding: 0;
+        border: 0;
+        background: none;
+        color: var(--muted);
+        text-decoration: underline;
+        cursor: pointer;
+      }
+      a.link {
+        display: inline-block;
+        margin-left: 16px;
+      }
+      #no-webgl a.link {
+        margin-left: 0;
+      }
+      #training {
+        position: absolute;
+        left: 50%;
+        top: 16px;
+        translate: -50% 0;
+        width: min(520px, calc(100% - 32px));
+        padding: 16px;
+        box-sizing: border-box;
+        border-radius: 12px;
+        background: rgb(12 15 23 / 0.9);
+        border: 1px solid var(--line);
+      }
+      #training.cheer {
+        animation: cheer 0.4s ease-out;
+      }
+      @keyframes cheer {
+        from { border-color: var(--good); box-shadow: 0 0 24px rgb(93 211 158 / 0.6); }
+      }
+      #training-title {
+        margin: 0 0 4px;
+        font-size: 20px;
+      }
+      #training-instruction {
+        margin: 0 0 12px;
+        color: var(--muted);
+      }
+      #training-progress > span {
+        background: var(--good);
+      }
+      #training-steps {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin: 12px 0 0;
+        padding: 0;
+        list-style: none;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      #training-steps li {
+        padding: 2px 8px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+      }
+      #training-steps li.current {
+        color: var(--text);
+        border-color: var(--text);
+      }
+      #training-steps li.done {
+        color: var(--good);
+        border-color: var(--good);
+      }
+      #training-skip {
+        float: right;
+        margin: 0;
+      }
+      #tracking-hint {
+        position: absolute;
+        left: 50%;
+        bottom: 150px;
+        translate: -50% 0;
+        width: max-content;
+        max-width: calc(100% - 32px);
+        padding: 8px 12px;
+        border-radius: 8px;
+        background: rgb(60 40 0 / 0.85);
+        border: 1px solid var(--pistol);
+        font-size: 14px;
+        pointer-events: none;
+      }
+      #pause[data-reason="hand"] .card {
+        border-color: var(--pistol);
+      }
+      #no-webgl .card p {
+        color: var(--text);
+      }
+      #loading .card {
+        text-align: center;
+      }
+      #loading .spinner {
+        width: 36px;
+        height: 36px;
+        margin: 4px auto 12px;
+        border: 3px solid var(--line);
+        border-top-color: var(--shield);
+        border-radius: 50%;
+        animation: spin 0.9s linear infinite;
+      }
+      @keyframes spin {
+        to { rotate: 360deg; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #loading .spinner { animation-duration: 3s; }
+      }
+
+      /* ---- Panel debug (tombol `) ---- */
+      #panel {
+        position: absolute;
+        left: 16px;
+        top: 80px;
+        max-width: calc(100% - 32px);
+      }
+      #panel pre {
+        margin: 0 0 8px;
+        padding: 8px 10px;
+        background: var(--panel);
+        border-radius: 6px;
+        font: 13px/1.5 ui-monospace, monospace;
+      }
+      #pose {
+        margin: 0 0 4px;
+        font-size: 28px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+      }
+      #pose[data-pose="pistol"] { color: var(--pistol); }
+      #pose[data-pose="shotgun"] { color: var(--shotgun); }
+      #pose[data-pose="shield"] { color: var(--shield); }
+      #pose[data-pose="fist"] { color: var(--blast); }
+      #recorder {
+        padding: 8px 10px;
+        background: var(--panel);
+        border-radius: 6px;
+        max-width: 320px;
+        font-size: 14px;
+      }
+      #recorder select,
+      #recorder button {
+        padding: 4px 8px;
+      }
+      #rec-info {
+        margin: 6px 0 0;
+      }
+      #rec-cue {
+        position: absolute;
+        left: 50%;
+        top: 40%;
+        translate: -50% -50%;
+        font-size: 72px;
+        font-weight: 800;
+        color: var(--pistol);
+        text-shadow: 0 4px 16px rgb(0 0 0 / 0.7);
+        pointer-events: none;
+      }
+      /* Poni dan garis beranda HP: HUD tidak boleh tertutup. */
+      #hud-top {
+        top: calc(16px + env(safe-area-inset-top));
+        left: calc(16px + env(safe-area-inset-left));
+        right: calc(16px + env(safe-area-inset-right));
+      }
+      #hud-bottom {
+        margin-bottom: env(safe-area-inset-bottom);
+      }
+      #webcam-preview {
+        margin: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) 0;
+      }
+      /* Layar sentuh: target minimal 44px agar jari tidak meleset. */
+      @media (pointer: coarse) {
+        #weapons {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+        }
+        #weapons button {
+          min-height: 48px;
+          font-size: 14px;
+          padding: 6px 4px;
+        }
+        button,
+        select {
+          min-height: 44px;
+        }
+      }
+      /* HP mendatar: tinggi sempit, jadi HUD dirapatkan dan bilah bawah tidak menumpuk pratinjau. */
+      @media (max-height: 500px) and (orientation: landscape) {
+        #hud-top {
+          top: calc(8px + env(safe-area-inset-top));
+        }
+        #hud-score {
+          font-size: 22px;
+        }
+        #hud-bottom {
+          bottom: 8px;
+        }
+        #webcam-preview {
+          width: 112px;
+          height: 84px;
+          bottom: 8px;
+        }
+        /* Kartu menu lebih tinggi dari layar: mulai dari atas agar bisa digulir, bukan terpotong. */
+        .screen {
+          place-items: start center;
+        }
+      }
+      @media (max-width: 600px) {
+        #webcam-preview {
+          width: 120px;
+          height: 90px;
+        }
+        #hud-score {
+          font-size: 24px;
+        }
+        #hud-bottom {
+          bottom: 116px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="render-canvas"></canvas>
+    <video id="webcam" playsinline muted></video>
+    <div id="vignette"></div>
+
+    <div id="hud" hidden>
+      <div id="hud-top">
+        <div>
+          <div id="hud-score">0</div>
+          <div id="hud-combo"></div>
+        </div>
+        <div id="hud-progress"></div>
+      </div>
+      <div id="hud-bottom">
+        <div>
+          <div class="bar-label"><span>Nyawa</span><span>Energi perisai</span></div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px">
+            <div id="hud-health" class="bar"><span></span></div>
+            <div id="hud-shield" class="bar"><span></span></div>
+          </div>
+        </div>
+        <div id="hud-status">
+          <span id="hud-shotgun"></span>
+          <span id="hud-weapon"></span>
+          <span id="hud-blast"></span>
+        </div>
+        <div id="weapons" role="group" aria-label="Senjata (mouse/sentuh)">
+          <button type="button" data-weapon="pistol">1 Pistol</button>
+          <button type="button" data-weapon="shotgun">2 Shotgun</button>
+          <button type="button" data-weapon="shield">3 Perisai</button>
+          <button type="button" data-weapon="blast">4 Ledakan</button>
+        </div>
+      </div>
+    </div>
+
+    <canvas id="webcam-preview" width="320" height="240" hidden></canvas>
+    <div id="crosshair" hidden></div>
+    <div id="rec-cue" hidden>TEMBAK!</div>
+
+    <div id="loading" class="screen" role="status">
+      <div class="card">
+        <div class="spinner" aria-hidden="true"></div>
+        <p>Menyiapkan arena...</p>
+        <button class="primary" type="button" hidden>Muat ulang</button>
+      </div>
+    </div>
+
+    <div id="menu" class="screen" hidden>
+      <div class="card">
+        <h1>Gesture Rail Shooter</h1>
+        <p>Tembak dengan tanganmu di depan webcam. Kamera bergerak sendiri; kamu tinggal membidik dan memilih senjata dengan pola jari.</p>
+        <dl class="gestures">
+          <dt>Pistol</dt>
+          <dd>Telunjuk lurus. Sentakkan tangan ke atas untuk menembak.</dd>
+          <dt>Shotgun</dt>
+          <dd>Telunjuk + jari tengah lurus. Sentak untuk tembakan menyebar jarak dekat.</dd>
+          <dt>Perisai</dt>
+          <dd>Telapak terbuka. Menahan serangan selama energi masih ada.</dd>
+          <dt>Ledakan</dt>
+          <dd>Kepalkan untuk mengisi tenaga, buka telapak untuk meledakkan musuh di sekitar.</dd>
+        </dl>
+        <div id="menu-difficulty" role="group" aria-label="Tingkat kesulitan"></div>
+        <div class="settings">
+          <label>Grafik
+            <select id="menu-quality">
+              <option value="auto">Otomatis</option>
+              <option value="high">Tinggi</option>
+              <option value="medium">Sedang</option>
+              <option value="low">Rendah</option>
+            </select>
+          </label>
+          <span>Suara <button id="menu-sound" type="button" aria-pressed="true">Nyala</button></span>
+        </div>
+        <div class="actions">
+          <button class="primary" type="button" data-start="hand">Main dengan tangan</button>
+          <button class="secondary" type="button" data-start="pointer">Main dengan mouse/sentuh</button>
+        </div>
+        <p id="menu-best"></p>
+        <button id="menu-training" class="link" type="button">Latihan gestur</button>
+        <a class="link demo-video" href="demo.mp4" target="_blank" rel="noopener" hidden>Tonton video demo</a>
+      </div>
+    </div>
+
+    <div id="result" class="screen" hidden>
+      <div class="card">
+        <h2 id="result-title"></h2>
+        <p id="result-record" hidden>Skor tertinggi baru!</p>
+        <dl id="result-stats"></dl>
+        <div class="actions">
+          <button id="result-again" class="primary" type="button">Main lagi</button>
+          <button id="result-menu" class="secondary" type="button">Menu</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="permission" class="screen" hidden>
+      <div class="card">
+        <h2>Izinkan kamera</h2>
+        <p>Game ini membaca pola jari dari webcam. Sebelum browser meminta izin, ini yang perlu kamu tahu:</p>
+        <ul class="privacy">
+          <li>Video diproses di perangkat ini dan tidak dikirim ke mana pun.</li>
+          <li>Tidak ada yang direkam atau disimpan.</li>
+          <li>Kamera mati saat kamu menutup tab ini.</li>
+        </ul>
+        <div class="actions">
+          <button id="permission-allow" class="primary" type="button">Izinkan kamera</button>
+          <button id="permission-pointer" class="secondary" type="button">Main dengan mouse saja</button>
+        </div>
+        <p id="permission-status" role="status"></p>
+        <button id="permission-back" class="link" type="button">Kembali ke menu</button>
+      </div>
+    </div>
+
+    <div id="training" hidden>
+      <button id="training-skip" class="link" type="button">Lewati latihan</button>
+      <h2 id="training-title"></h2>
+      <p id="training-instruction"></p>
+      <div id="training-progress" class="bar"><span></span></div>
+      <ol id="training-steps"></ol>
+    </div>
+
+    <div id="pause" class="screen" hidden>
+      <div class="card">
+        <h2 id="pause-title"></h2>
+        <p id="pause-body"></p>
+        <div class="actions">
+          <button id="pause-resume" class="primary" type="button">Lanjut</button>
+          <button id="pause-quit" class="secondary" type="button">Keluar ke menu</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="tracking-hint" role="status" hidden></div>
+
+    <div id="no-webgl" class="screen" hidden>
+      <div class="card">
+        <h2>Browser ini tidak bisa menjalankan grafik 3D</h2>
+        <p>Game ini butuh WebGL, yang tidak tersedia atau dimatikan di browser ini.</p>
+        <p>Coba buka di Chrome, Edge, Firefox, atau Safari versi terbaru, dan pastikan akselerasi perangkat keras menyala di pengaturan browser.</p>
+        <a class="link demo-video" href="demo.mp4" target="_blank" rel="noopener" hidden>Tonton video demo</a>
+      </div>
+    </div>
+
+    <div id="panel" hidden>
+      <pre id="stats"></pre>
+      <p id="pose" data-pose="none"></p>
+      <pre id="gesture-detail"></pre>
+      <div id="recorder" hidden>
+        <select id="rec-scenario" aria-label="Skenario rekaman"></select>
+        <button id="rec-start" type="button">Rekam 4 detik</button>
+        <p id="rec-info"></p>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

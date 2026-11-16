@@ -1,0 +1,27 @@
+{
+  "name": "gesture-rail-shooter",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "setup": "node scripts/setup-assets.mjs",
+    "predev": "npm run setup",
+    "dev": "vite",
+    "dev:lan": "npm run setup && node scripts/cert.mjs && vite --mode lan",
+    "prebuild": "npm run setup",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "preview:lan": "node scripts/cert.mjs && vite preview --mode lan",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@babylonjs/core": "^9.35.0",
+    "@mediapipe/tasks-vision": "^1.2.2"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^4.1.12"
+  }
+}
